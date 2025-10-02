@@ -1,3 +1,3 @@
-from . import utils, build_graph, tensor_automata
+from . import utils, build_graph, tensor_automata, task4
 
-__all__ = ["utils", "build_graph", "tensor_automata"]
+__all__ = ["utils", "build_graph", "tensor_automata", "task4"]
