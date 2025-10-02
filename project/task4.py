@@ -56,36 +56,46 @@ def ms_bfs_based_rpq(
             matrix[src_idx, dest_idx] = True
         dfa_matrices[symbol] = matrix.tocsr()
 
+    start_nodes_list = sorted(start_nodes)
+    start_node_to_index = {node: idx for idx, node in enumerate(start_nodes_list)}
+
+    R = lil_matrix((n_graph, n_dfa), dtype=int)
+    queue = deque()
+
+    for start_node in start_nodes_list:
+        graph_idx = graph_state_to_idx[State(start_node)]
+        for dfa_start in dfa.start_states:
+            dfa_idx = dfa_state_to_idx[dfa_start]
+            bit_mask = 1 << start_node_to_index[start_node]
+            if (R[graph_idx, dfa_idx] & bit_mask) == 0:
+                R[graph_idx, dfa_idx] |= bit_mask
+                queue.append((graph_idx, dfa_idx))
+
+    while queue:
+        current_graph_idx, current_dfa_idx = queue.popleft()
+        current_mask = R[current_graph_idx, current_dfa_idx]
+        for symbol in graph_matrices.keys():
+            if symbol not in dfa_matrices:
+                continue
+            next_graph_indices = (
+                graph_matrices[symbol].getrow(current_graph_idx).indices
+            )
+            next_dfa_indices = dfa_matrices[symbol].getrow(current_dfa_idx).indices
+            for next_graph_idx in next_graph_indices:
+                for next_dfa_idx in next_dfa_indices:
+                    existing_mask = R[next_graph_idx, next_dfa_idx]
+                    new_mask = existing_mask | current_mask
+                    if new_mask != existing_mask:
+                        R[next_graph_idx, next_dfa_idx] = new_mask
+                        queue.append((next_graph_idx, next_dfa_idx))
+
     result = set()
-    for start_node in start_nodes:
-        visited = lil_matrix((n_graph, n_dfa), dtype=bool)
-        start_graph_idx = graph_state_to_idx[State(start_node)]
-        start_dfa_state = list(dfa.start_states)[0]
-        start_dfa_idx = dfa_state_to_idx[start_dfa_state]
-        visited[start_graph_idx, start_dfa_idx] = True
-        queue = deque()
-        queue.append((start_graph_idx, start_dfa_idx))
-        while queue:
-            current_graph_idx, current_dfa_idx = queue.popleft()
-            for symbol in graph_matrices.keys():
-                if symbol not in dfa_matrices:
-                    continue
-                graph_matrix = graph_matrices[symbol]
-                graph_row = graph_matrix.getrow(current_graph_idx)
-                next_graph_indices = graph_row.indices
-                dfa_matrix = dfa_matrices[symbol]
-                dfa_row = dfa_matrix.getrow(current_dfa_idx)
-                next_dfa_indices = dfa_row.indices
-                for next_graph_idx in next_graph_indices:
-                    for next_dfa_idx in next_dfa_indices:
-                        if not visited[next_graph_idx, next_dfa_idx]:
-                            visited[next_graph_idx, next_dfa_idx] = True
-                            queue.append((next_graph_idx, next_dfa_idx))
-        for final_node in final_nodes:
-            final_graph_idx = graph_state_to_idx[State(final_node)]
-            for final_dfa_state in dfa.final_states:
-                final_dfa_idx = dfa_state_to_idx[final_dfa_state]
-                if visited[final_graph_idx, final_dfa_idx]:
-                    result.add((start_node, final_node))
-                    break
+    for final_node in final_nodes:
+        final_graph_idx = graph_state_to_idx[State(final_node)]
+        for final_dfa_state in dfa.final_states:
+            final_dfa_idx = dfa_state_to_idx[final_dfa_state]
+            mask = R[final_graph_idx, final_dfa_idx]
+            for i in range(len(start_nodes_list)):
+                if mask & (1 << i):
+                    result.add((start_nodes_list[i], final_node))
     return result
