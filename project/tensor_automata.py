@@ -1,208 +1,126 @@
 from typing import Iterable
+from itertools import product
 from networkx import MultiDiGraph
 from pyformlang.finite_automaton import State, Symbol, NondeterministicFiniteAutomaton
-from scipy.sparse import identity, kron, csr_matrix, lil_matrix
+from scipy.sparse import dok_matrix, kron
+import numpy as np
 
 from project.build_graph import regex_to_dfa, graph_to_nfa
 
 
 class AdjacencyMatrixFA:
-    def __init__(self, finite_automaton: NondeterministicFiniteAutomaton):
+    def __init__(self, finite_automaton: NondeterministicFiniteAutomaton | None = None) -> None:
+        if finite_automaton is None:
+            self.states = set()
+            self.state_to_index = {}
+            self.start_states = set()
+            self.final_states = set()
+            self.transition_matrices = {}
+            return
+
         self.states = finite_automaton.states
-        self.labels = finite_automaton.symbols
-        self.start_states = (
-            finite_automaton.start_states
-            if isinstance(finite_automaton.start_states, set)
-            else {finite_automaton.start_states}
-        )
-        self.final_states = (
-            finite_automaton.final_states
-            if isinstance(finite_automaton.final_states, set)
-            else {finite_automaton.final_states}
-        )
-
         state_list = list(self.states)
-        self.state_to_index = {state: idx for idx, state in enumerate(state_list)}
-        self.index_to_state = {idx: state for idx, state in enumerate(state_list)}
-        self.transition_matrices = self._build_transition_matrices(finite_automaton)
+        self.state_to_index = {state: i for i, state in enumerate(state_list)}
+        self.index_to_state = {i: state for i, state in enumerate(state_list)}
+        self.start_states = {self.state_to_index[s] for s in finite_automaton.start_states}
+        self.final_states = {self.state_to_index[s] for s in finite_automaton.final_states}
 
-    def _build_transition_matrices(
-        self, finite_automaton: NondeterministicFiniteAutomaton
-    ) -> dict[Symbol, csr_matrix]:
-        transition_matrices = {}
-        automaton_transitions = finite_automaton.to_dict()
-        size = len(self.states)
+        matrices = {
+            symbol: np.zeros((len(self.states), len(self.states)), dtype=bool)
+            for symbol in finite_automaton.symbols
+        }
 
-        for symbol in self.labels:
-            matrix = lil_matrix((size, size), dtype=bool)
-            for source_state in self.states:
-                if source_state not in automaton_transitions:
-                    continue
-                state_transitions = automaton_transitions[source_state]
-                if symbol not in state_transitions:
-                    continue
-                destination_states = state_transitions[symbol]
-                if not isinstance(destination_states, set):
-                    destination_states = {destination_states}
-                source_idx = self.state_to_index[source_state]
-                for destination_state in destination_states:
-                    matrix[source_idx, self.state_to_index[destination_state]] = True
-            transition_matrices[symbol] = matrix.tocsr()
-        return transition_matrices
+        for src, dst, label in finite_automaton.to_networkx().edges(data="label"):
+            if label is not None:
+                symbol = Symbol(label)
+                matrices[symbol][
+                    self.state_to_index[src], self.state_to_index[dst]
+                ] = True
 
-    def get_trans_closure(self) -> csr_matrix:
+        self.transition_matrices = {sym: dok_matrix(mat) for sym, mat in matrices.items()}
+
+    def accepts(self, word: Iterable[Symbol]) -> bool:
+        current_states = self.start_states.copy()
+
+        for symbol in word:
+            if symbol not in self.transition_matrices:
+                return False
+
+            next_states = set()
+            for source_state in current_states:
+                _, dest_indices = self.transition_matrices[symbol][source_state, :].nonzero()
+                next_states.update(dest_indices)
+
+            current_states = next_states
+            if not current_states:
+                return False
+
+        return bool(current_states & self.final_states)
+
+    def get_trans_closure(self) -> np.ndarray:
         if not self.transition_matrices:
-            return identity(len(self.states), format="csr", dtype=bool)
-        combined = identity(len(self.states), format="csr", dtype=bool)
-        for matrix in self.transition_matrices.values():
-            combined += matrix
-        closure = combined.copy()
-        prev_nnz = closure.nnz
-        for _ in range(len(self.states)):
-            closure = closure @ combined
-            if closure.nnz == prev_nnz:
-                break
-            prev_nnz = closure.nnz
-        return closure
+            return np.eye(len(self.states), dtype=bool)
+        closure_matrix = sum(self.transition_matrices.values())
+        closure_matrix.setdiag(True)
+        return np.linalg.matrix_power(closure_matrix.toarray(), len(self.states))
 
     def is_empty(self) -> bool:
         if not self.start_states or not self.final_states:
             return True
+
         closure = self.get_trans_closure()
         return not any(
-            closure[self.state_to_index[start_state], self.state_to_index[final_state]]
-            for start_state in self.start_states
-            for final_state in self.final_states
-        )
-
-    def accepts(self, word: Iterable[Symbol]) -> bool:
-        current_states = self.start_states.copy()
-        for symbol in word:
-            if symbol not in self.transition_matrices:
-                return False
-            next_states = {
-                self.index_to_state[dest_idx]
-                for source_state in current_states
-                for dest_idx in self.transition_matrices[symbol][
-                    self.state_to_index[source_state]
-                ].indices
-            }
-            current_states = next_states
-            if not current_states:
-                return False
-        return bool(current_states & self.final_states)
-
-    @classmethod
-    def _with_index_mapping(
-        cls,
-        finite_automaton: NondeterministicFiniteAutomaton,
-        state_to_index: dict[State, int],
-        index_to_state: dict[int, State],
-    ) -> "AdjacencyMatrixFA":
-        instance = cls.__new__(cls)
-        instance.states = finite_automaton.states
-        instance.labels = finite_automaton.symbols
-        instance.start_states = (
-            finite_automaton.start_states
-            if isinstance(finite_automaton.start_states, set)
-            else {finite_automaton.start_states}
-        )
-        instance.final_states = (
-            finite_automaton.final_states
-            if isinstance(finite_automaton.final_states, set)
-            else {finite_automaton.final_states}
-        )
-        instance.state_to_index = state_to_index
-        instance.index_to_state = index_to_state
-        instance.transition_matrices = instance._build_transition_matrices(
-            finite_automaton
-        )
-        return instance
-
-    @staticmethod
-    def from_matrices(
-        states: set[State],
-        start_states: set[State],
-        final_states: set[State],
-        state_to_index: dict[State, int],
-        index_to_state: dict[int, State],
-        transition_matrices: dict[Symbol, csr_matrix],
-    ) -> "AdjacencyMatrixFA":
-        nfa = NondeterministicFiniteAutomaton(
-            states=states, start_state=start_states, final_states=final_states
-        )
-        for symbol, matrix in transition_matrices.items():
-            for source_idx, dest_idx in zip(*matrix.nonzero()):
-                nfa.add_transition(
-                    index_to_state[source_idx], symbol, index_to_state[dest_idx]
-                )
-        return AdjacencyMatrixFA._with_index_mapping(
-            nfa, state_to_index, index_to_state
+            closure[start_idx, final_idx]
+            for start_idx in self.start_states
+            for final_idx in self.final_states
         )
 
 
 def intersect_automata(
-    automaton1: AdjacencyMatrixFA, automaton2: AdjacencyMatrixFA
+    fa1: AdjacencyMatrixFA, fa2: AdjacencyMatrixFA
 ) -> AdjacencyMatrixFA:
-    states1, states2 = list(automaton1.states), list(automaton2.states)
-    size2 = len(states2)
-
-    intersection_states = set()
-    state_to_index = {}
-    index_to_state = {}
-
-    for i, state1 in enumerate(states1):
-        for j, state2 in enumerate(states2):
-            intersection_state = State((state1, state2))
-            intersection_states.add(intersection_state)
-            intersection_idx = i * size2 + j
-            state_to_index[intersection_state] = intersection_idx
-            index_to_state[intersection_idx] = intersection_state
-
-    start_states = {
-        State((s1, s2))
-        for s1 in automaton1.start_states
-        for s2 in automaton2.start_states
+    intersection = AdjacencyMatrixFA()
+    for s1, s2 in product(fa1.states, fa2.states):
+        combined_state = State((s1, s2))
+        idx = len(fa2.states) * fa1.state_to_index[s1] + fa2.state_to_index[s2]
+        intersection.states.add(combined_state)
+        intersection.state_to_index[combined_state] = idx
+        if (
+            fa1.state_to_index[s1] in fa1.start_states
+            and fa2.state_to_index[s2] in fa2.start_states
+        ):
+            intersection.start_states.add(idx)
+        if (
+            fa1.state_to_index[s1] in fa1.final_states
+            and fa2.state_to_index[s2] in fa2.final_states
+        ):
+            intersection.final_states.add(idx)
+    intersection.transition_matrices = {
+        label: kron(fa1.transition_matrices[label], fa2.transition_matrices[label], format="dok")
+        for label in fa1.transition_matrices.keys() & fa2.transition_matrices.keys()
     }
-    final_states = {
-        State((s1, s2))
-        for s1 in automaton1.final_states
-        for s2 in automaton2.final_states
-    }
-    shared_symbols = automaton1.labels & automaton2.labels
-    transition_matrices = {
-        symbol: kron(
-            automaton1.transition_matrices[symbol],
-            automaton2.transition_matrices[symbol],
-            format="csr",
-        )
-        for symbol in shared_symbols
-    }
-
-    return AdjacencyMatrixFA.from_matrices(
-        intersection_states,
-        start_states,
-        final_states,
-        state_to_index,
-        index_to_state,
-        transition_matrices,
-    )
+    return intersection
 
 
 def tensor_based_rpq(
     regex: str, graph: MultiDiGraph, start_nodes: set[int], final_nodes: set[int]
 ) -> set[tuple[int, int]]:
-    intersection = intersect_automata(
-        AdjacencyMatrixFA(regex_to_dfa(regex)),
-        AdjacencyMatrixFA(graph_to_nfa(graph, start_nodes, final_nodes)),
-    )
-    closure = intersection.get_trans_closure()
-    return {
-        (start_state.value[1], final_state.value[1])
-        for start_state in intersection.start_states
-        for final_state in intersection.final_states
-        if closure[
-            intersection.state_to_index[start_state],
-            intersection.state_to_index[final_state],
-        ]
+    regex_dfa = regex_to_dfa(regex)
+    regex_adj = AdjacencyMatrixFA(regex_dfa)
+    graph_adj = AdjacencyMatrixFA(graph_to_nfa(graph, start_nodes, final_nodes))
+    intersection_fa = intersect_automata(graph_adj, regex_adj)
+    closure = intersection_fa.get_trans_closure()
+    result = {
+        (start_node, final_node)
+        for start_node in start_nodes
+        for final_node in final_nodes
+        if any(
+            closure[
+                intersection_fa.state_to_index[(start_node, regex_start)],
+                intersection_fa.state_to_index[(final_node, regex_final)]
+            ]
+            for regex_start in regex_dfa.start_states
+            for regex_final in regex_dfa.final_states
+        )
     }
+    return result
