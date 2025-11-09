@@ -9,7 +9,9 @@ from project.build_graph import regex_to_dfa, graph_to_nfa
 
 
 class AdjacencyMatrixFA:
-    def __init__(self, finite_automaton: NondeterministicFiniteAutomaton | None = None) -> None:
+    def __init__(
+        self, finite_automaton: NondeterministicFiniteAutomaton | None = None
+    ) -> None:
         if finite_automaton is None:
             self.states = set()
             self.state_to_index = {}
@@ -22,8 +24,12 @@ class AdjacencyMatrixFA:
         state_list = list(self.states)
         self.state_to_index = {state: i for i, state in enumerate(state_list)}
         self.index_to_state = {i: state for i, state in enumerate(state_list)}
-        self.start_states = {self.state_to_index[s] for s in finite_automaton.start_states}
-        self.final_states = {self.state_to_index[s] for s in finite_automaton.final_states}
+        self.start_states = {
+            self.state_to_index[s] for s in finite_automaton.start_states
+        }
+        self.final_states = {
+            self.state_to_index[s] for s in finite_automaton.final_states
+        }
 
         matrices = {
             symbol: np.zeros((len(self.states), len(self.states)), dtype=bool)
@@ -33,11 +39,13 @@ class AdjacencyMatrixFA:
         for src, dst, label in finite_automaton.to_networkx().edges(data="label"):
             if label is not None:
                 symbol = Symbol(label)
-                matrices[symbol][
-                    self.state_to_index[src], self.state_to_index[dst]
-                ] = True
+                matrices[symbol][self.state_to_index[src], self.state_to_index[dst]] = (
+                    True
+                )
 
-        self.transition_matrices = {sym: dok_matrix(mat) for sym, mat in matrices.items()}
+        self.transition_matrices = {
+            sym: dok_matrix(mat) for sym, mat in matrices.items()
+        }
 
     def accepts(self, word: Iterable[Symbol]) -> bool:
         current_states = self.start_states.copy()
@@ -48,7 +56,9 @@ class AdjacencyMatrixFA:
 
             next_states = set()
             for source_state in current_states:
-                _, dest_indices = self.transition_matrices[symbol][source_state, :].nonzero()
+                _, dest_indices = self.transition_matrices[symbol][
+                    source_state, :
+                ].nonzero()
                 next_states.update(dest_indices)
 
             current_states = next_states
@@ -96,7 +106,9 @@ def intersect_automata(
         ):
             intersection.final_states.add(idx)
     intersection.transition_matrices = {
-        label: kron(fa1.transition_matrices[label], fa2.transition_matrices[label], format="dok")
+        label: kron(
+            fa1.transition_matrices[label], fa2.transition_matrices[label], format="dok"
+        )
         for label in fa1.transition_matrices.keys() & fa2.transition_matrices.keys()
     }
     return intersection
@@ -117,7 +129,7 @@ def tensor_based_rpq(
         if any(
             closure[
                 intersection_fa.state_to_index[(start_node, regex_start)],
-                intersection_fa.state_to_index[(final_node, regex_final)]
+                intersection_fa.state_to_index[(final_node, regex_final)],
             ]
             for regex_start in regex_dfa.start_states
             for regex_final in regex_dfa.final_states
