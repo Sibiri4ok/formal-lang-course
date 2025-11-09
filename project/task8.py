@@ -7,6 +7,7 @@ from scipy.sparse import dok_matrix
 from project.build_graph import graph_to_nfa
 from project.tensor_automata import AdjacencyMatrixFA, intersect_automata
 
+
 def rsm_to_nfa(rsm: RecursiveAutomaton) -> NondeterministicFiniteAutomaton:
     nfa = NondeterministicFiniteAutomaton()
 
@@ -42,14 +43,17 @@ def tensor_based_cfpq(
     for non_term in rsm.boxes:
         for automaton in (graph_m, rsm_m):
             automaton.transition_matrices.setdefault(
-                non_term, dok_matrix((len(automaton.states), len(automaton.states)), dtype=bool)
+                non_term,
+                dok_matrix((len(automaton.states), len(automaton.states)), dtype=bool),
             )
 
     prev_nnz, curr_nnz = -1, 0
     while prev_nnz != curr_nnz:
         prev_nnz = curr_nnz
         intersection = intersect_automata(rsm_m, graph_m)
-        idx_to_state = {idx: state for state, idx in intersection.state_to_index.items()}
+        idx_to_state = {
+            idx: state for state, idx in intersection.state_to_index.items()
+        }
 
         srcs, dests = intersection.get_trans_closure().nonzero()
         for s_idx, d_idx in zip(srcs, dests):
@@ -70,7 +74,9 @@ def tensor_based_cfpq(
                     graph_m.state_to_index[dest_graph_node],
                 ] = True
 
-        curr_nnz = sum(matrix.count_nonzero() for _, matrix in graph_m.transition_matrices.items() )
+        curr_nnz = sum(
+            matrix.count_nonzero() for _, matrix in graph_m.transition_matrices.items()
+        )
 
     result = {
         (graph_idx_to_state[start].value, graph_idx_to_state[final].value)
@@ -80,8 +86,10 @@ def tensor_based_cfpq(
     }
     return result
 
+
 def cfg_to_rsm(cfg: CFG) -> RecursiveAutomaton:
     return ebnf_to_rsm(cfg.to_text())
+
 
 def ebnf_to_rsm(ebnf: str) -> RecursiveAutomaton:
     return RecursiveAutomaton.from_text(ebnf)
